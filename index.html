@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Live2D 鼠标互动测试</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
+body{font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+#canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none}
+#panel{
+  position:fixed;left:12px;top:12px;z-index:20;
+  max-width:calc(100vw - 24px);padding:10px 12px;border-radius:12px;
+  color:#fff;background:rgba(20,20,25,.80);backdrop-filter:blur(10px);
+  box-shadow:0 6px 24px rgba(0,0,0,.22);font-size:13px;line-height:1.5
+}
+#panel button{border:0;border-radius:8px;padding:6px 9px;margin:5px 4px 0 0;cursor:pointer}
+#status{opacity:.86;margin-top:4px}
+#debug{display:none;white-space:pre-wrap;color:#ffd7d7;font-size:11px;max-width:70vw}
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="panel">
+  <b>Live2D 鼠标互动测试 · GitHub Pages版</b>
+  <div id="status">正在加载模型……</div>
+  <button id="motion" disabled>随机动作</button>
+  <button id="center">视线归中</button>
+  <div id="debug"></div>
+</div>
+
+<!-- GitHub Pages 直接访问时使用 CDN，不再读取本地文件夹。 -->
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.4.2/dist/pixi.min.js"></script>
+<script src="https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism4.min.js"></script>
+
+<script>
+(() => {
+  const status = document.getElementById('status');
+  const debug = document.getElementById('debug');
+  const motionBtn = document.getElementById('motion');
+  const centerBtn = document.getElementById('center');
+
+  let app, model;
+  let targetX = 0, targetY = 0, lookX = 0, lookY = 0;
+
+  function setStatus(s){ status.textContent = s; }
+  function fail(e){
+    console.error(e);
+    setStatus('加载失败：' + (e?.message || e));
+    debug.style.display = 'block';
+    debug.textContent = String(e?.stack || e);
+  }
+
+  async function main(){
+    try{
+      if(!window.PIXI) throw new Error('PixiJS 没有加载成功');
+      if(!PIXI.live2d) throw new Error('pixi-live2d-display 没有加载成功');
+
+      app = new PIXI.Application({
+        view: document.getElementById('canvas'),
+        resizeTo: window,
+        backgroundAlpha: 0,
+        antialias: true,
+        autoStart: true,
+        resolution: Math.min(window.devicePixelRatio || 1, 2)
+      });
+
+      // 所有资源均使用 GitHub Pages 的相对路径。
+      model = await PIXI.live2d.Live2DModel.from('./c_0120_web.model3.json', {
+        autoInteract: false
+      });
+
+      app.stage.addChild(model);
+      fit();
+
+      // 原模型提供的 idle + 其他动作全部被放入 Idle 动作组。
+      try { model.motion('Idle', 0); } catch(e) { console.warn('Idle motion:', e); }
+
+      motionBtn.disabled = false;
+      setStatus('模型加载成功！移动鼠标：角色原地看向鼠标；模型本身不会移动位置。');
+
+      // 点击角色时播放随机动作。
+      model.on('hit', () => playRandomMotion());
+    }catch(e){ fail(e); }
+  }
+
+  function fit(){
+    if(!model || !app) return;
+    const w = innerWidth, h = innerHeight;
+    const mw = model.width || 1, mh = model.height || 1;
+    const scale = Math.min(w/mw, h/mh) * 0.72;
+    model.scale.set(scale);
+    model.anchor.set(.5,.5);
+    model.x = w/2;
+    model.y = h/2 + Math.min(55, h*.06);
+  }
+
+  function playRandomMotion(){
+    if(!model) return;
+    const n = 7; // 当前模型 motions 文件数量
+    const i = Math.floor(Math.random()*n);
+    try { model.motion('Idle', i); }
+    catch(e){ console.warn('motion:', e); }
+  }
+
+  // 桌宠模式：
+  // 模型的屏幕位置始终固定，不跟随鼠标移动。
+  // 鼠标只控制“看向哪里”，不改变 model.x / model.y。
+  function animateLook(){
+    lookX += (targetX - lookX) * 0.12;
+    lookY += (targetY - lookY) * 0.12;
+
+    if(model?.internalModel?.coreModel){
+      const core = model.internalModel.coreModel;
+      const set = (id,v) => {
+        try { core.setParameterValueById(id,v); } catch(_){}
+      };
+
+      // 只改变 Live2D 参数，不改变模型在网页中的坐标。
+      set('ParamAngleX', lookX * 12);
+      set('ParamAngleY', -lookY * 12);
+      set('ParamAngleZ', lookX * 5);
+      set('ParamEyeBallX', lookX * 0.8);
+      set('ParamEyeBallY', -lookY * 0.6);
+      set('pointX', lookX * 15);
+      set('pointY', -lookY * 15);
+      set('danbaoX', lookX * 5);
+      set('danbaoY', -lookY * 5);
+
+      // 强制保持固定位置，避免任何外部交互改变模型坐标。
+      model.x = innerWidth / 2;
+      model.y = innerHeight / 2 + Math.min(55, innerHeight * .06);
+    }
+
+    requestAnimationFrame(animateLook);
+  }
+
+  addEventListener('pointermove', e => {
+    targetX = (e.clientX / innerWidth) * 2 - 1;
+    targetY = (e.clientY / innerHeight) * 2 - 1;
+  }, {passive:true});
+
+  centerBtn.onclick = () => { targetX = 0; targetY = 0; };
+  motionBtn.onclick = playRandomMotion;
+  addEventListener('resize', fit);
+
+  main();
+  animateLook();
+})();
+</script>
+</body>
+</html>
